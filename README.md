@@ -28,15 +28,17 @@ flowchart TB
         BUILD[Build .NET] --> TEST[Run Tests]
         TEST --> DOCKER[Build Docker Image]
         DOCKER --> PUSH[Push to ACR]
-        DOCKER --> DRYRUN[Local: Kind Deploy]
     end
 
     subgraph ACR["Azure Container Registry"]
         REGISTRY[(Container Images)]
     end
 
-    subgraph AZDO["Azure Pipelines"]
-        AZBUILD[Build Stage] --> AZDEPLOY[Deploy Stage]
+    subgraph GitOps["GitOps Approach"]
+        direction TB
+        MANIFESTS[deploy/k8s/ manifests<br/>versioned in git]
+        ARGO[ArgoCD / Flux<br/>syncs cluster to git]
+        MANIFESTS -->|kubectl apply| ARGO
     end
 
     subgraph AKS["Azure Kubernetes Service"]
@@ -53,10 +55,6 @@ flowchart TB
         subgraph Services["Networking"]
             SVC[LoadBalancer Service<br/>port 80 → 8080]
         end
-        subgraph Health["Observability"]
-            LIV[Liveness Probe<br/>/health : 15s]
-            READY[Readiness Probe<br/>/health : 10s]
-        end
     end
 
     subgraph Local["Local Development (Kind)"]
@@ -64,11 +62,10 @@ flowchart TB
     end
 
     DEV --> BUILD
-    DEV --> AZBUILD
     PUSH --> REGISTRY
     REGISTRY --> AKS
-    REGISTRY --> AZDEPLOY
-    GH --> AKS
+    ARGO -->|pulls desired state| AKS
+    GH -->|image tag update| MANIFESTS
     GH --> Local
 ```
 
@@ -97,7 +94,7 @@ flowchart TB
 ### CI/CD
 - **Conditional Pipelines** — Build and test run on every PR. Azure deployment steps activate only when credentials are configured, allowing fork-friendly contribution.
 - **Idempotent Deployments** — `kubectl apply` ensures manifests are declarative. Re-running the pipeline produces the same result.
-- **GitOps Ready** — All Kubernetes manifests are versioned in this repository, enabling ArgoCD or Flux-based GitOps workflows.
+- **GitOps Ready** — All Kubernetes manifests are versioned in this repo. See [GitOps Extension](#gitops-extension) for migration steps to ArgoCD or Flux.
 
 ## What's Demonstrated
 
@@ -185,6 +182,93 @@ The workflow runs **build + test** unconditionally, and only pushes to ACR / dep
 ### Azure Pipelines
 
 Set pipeline variables (`acrLoginServer`, `aksClusterName`, etc.) via the Azure DevOps portal. The pipeline conditionally skips the Deploy stage if AKS isn't configured.
+
+## GitOps Extension
+
+This repository is structured to adopt a **GitOps** workflow using **ArgoCD** or **Flux**. The key principle: the `deploy/k8s/` directory becomes the single source of truth, and a Git operator continuously reconciles the cluster to match it.
+
+### Migration Steps
+
+#### 1. Separate image tag from manifests
+
+Move the image tag into a separate config file so manifests stay environment-agnostic:
+
+```yaml
+# deploy/k8s/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - service.yaml
+images:
+  - name: __IMAGE__
+    newName: myacr.azurecr.io/cloud-native-microservice
+    newTag: latest
+```
+
+#### 2. Update CI/CD to only build and push
+
+The pipeline no longer deploys directly — it only builds the image and updates the tag in the GitOps repo:
+
+```yaml
+# .github/workflows/deploy.yml (GitOps variant)
+steps:
+  - run: dotnet build && dotnet test
+  - run: docker build -t $ACR/$IMAGE:${{ github.sha }} .
+  - run: docker push $ACR/$IMAGE:${{ github.sha }}
+  - run: |
+      # Update tag in GitOps config repo
+      sed -i "s|newTag:.*|newTag: ${{ github.sha }}|g" deploy/k8s/kustomization.yaml
+      git commit -am "Update image tag to ${{ github.sha }}"
+      git push
+```
+
+#### 3. Install ArgoCD or Flux
+
+**ArgoCD:**
+```bash
+kubectl create namespace argocd
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+argocd app create microservice \
+  --repo https://github.com/your-org/azure-dotnetservice.git \
+  --path deploy/k8s \
+  --dest-server https://$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}') \
+  --dest-namespace default
+```
+
+**Flux:**
+```bash
+flux bootstrap github \
+  --owner=your-org \
+  --repository=azure-dotnetservice \
+  --path=deploy/k8s \
+  --personal
+```
+
+#### 4. Enable auto-sync
+
+Both ArgoCD and Flux can auto-sync the cluster to the git state. When the CI pipeline updates the image tag in `kustomization.yaml`, the operator detects the drift and applies the new image automatically.
+
+### GitOps Architecture (with ArgoCD)
+
+```mermaid
+flowchart LR
+    DEV[Developer] -->|git push| GIT[GitHub Repo]
+    GIT -->|CI build + push image| ACR[Azure Container Registry]
+    GIT -->|ArgoCD syncs manifests| ARGO[ArgoCD]
+    ARGO -->|kubectl apply| AKS[AKS Cluster]
+    ACR -->|pulls new image| AKS
+```
+
+### Benefits of GitOps for this repo
+
+| Benefit | How it applies |
+|---------|----------------|
+| **Audit Trail** | Every manifest change is a git commit — full history of who changed what and when. |
+| **Drift Detection** | ArgoCD/Flux continuously compare cluster state to git. Manual changes are reverted automatically. |
+| **Multi-Environment** | Use separate branches or directories for dev/staging/prod with promotion via PRs. |
+| **Disaster Recovery** | Spin up a new cluster and point ArgoCD at the repo — the entire workload is restored automatically. |
+| **PR-Based Deployments** | Open a PR to change replica count or image tag; merge triggers the sync. |
 
 ## Kubernetes Manifests
 
