@@ -4,6 +4,86 @@
 
 A showcase repository demonstrating containerized .NET microservice deployment to **Azure Kubernetes Service (AKS)** with **GitHub Actions** and **Azure Pipelines** — designed to run fully offline with Kind when no Azure subscription is available.
 
+## Business Impact
+
+| Impact | Description |
+|--------|-------------|
+| **Faster Time-to-Market** | Automated CI/CD pipelines reduce manual deployment overhead from hours to minutes, enabling rapid feature iteration. |
+| **Reduced Operational Risk** | Rolling updates with health probes ensure zero-downtime deployments. Failed releases automatically roll back. |
+| **Cost Optimization** | Container resource limits (CPU/memory) prevent resource sprawl. AKS cluster auto-scaling right-sizes infrastructure to demand. |
+| **Developer Velocity** | Local Kind environment mirrors production AKS, allowing developers to validate Kubernetes deployments before committing. |
+| **Platform Consistency** | Same Docker image and Kubernetes manifests run identically across dev, staging, and production environments. |
+| **Vendor Flexibility** | Kubernetes abstraction avoids cloud lock-in — workloads can migrate between AKS, EKS, GKE, or on-premise clusters. |
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                        CI/CD Pipeline (GitHub Actions)                    │
+│                                                                          │
+│   ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌────────────────┐    │
+│   │  Build   │───▶│   Test   │───▶│Container │───▶│  Deploy to     │    │
+│   │  .NET    │    │  xUnit   │    │  Build   │    │  AKS / Kind    │    │
+│   └──────────┘    └──────────┘    └──────────┘    └────────────────┘    │
+│                                          │                              │
+│                                          ▼                              │
+│                                    ┌──────────┐                         │
+│                                    │   ACR    │                         │
+│                                    │(Registry)│                         │
+│                                    └──────────┘                         │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│                      Azure Kubernetes Service (AKS)                      │
+│                                                                          │
+│   ┌──────────────────────────────────────────────────────────────┐       │
+│   │  ┌──────────────────────┐  ┌──────────────────────┐          │       │
+│   │  │  Pod                 │  │  Pod                 │   ...    │       │
+│   │  │  ┌────────────────┐  │  │  ┌────────────────┐  │          │       │
+│   │  │  │ .NET Microsvc. │  │  │  │ .NET Microsvc. │  │  3x      │       │
+│   │  │  │ port 8080      │  │  │  │ port 8080      │  │  replicas │       │
+│   │  │  └────────────────┘  │  │  └────────────────┘  │          │       │
+│   │  └──────────────────────┘  └──────────────────────┘          │       │
+│   │                                                              │       │
+│   │  ┌──────────────────────────────────────────────────────┐    │       │
+│   │  │  Service (LoadBalancer)          port 80 ──▶ 8080    │    │       │
+│   │  └──────────────────────────────────────────────────────┘    │       │
+│   │                                                              │       │
+│   │  Probes:  /health (liveness + readiness)                     │       │
+│   │  Strategy: RollingUpdate (maxUnavailable: 0)                  │       │
+│   └──────────────────────────────────────────────────────────────┘       │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+## Design Considerations
+
+### Scalability
+- **Horizontal Pod Autoscaling** — The microservice is stateless, enabling HPA based on CPU/memory metrics. Replica count is configurable in `deploy/k8s/deployment.yaml`.
+- **Resource Requests/Limits** — CPU (100m/250m) and memory (128Mi/256Mi) guardrails prevent noisy-neighbor issues in multi-tenant clusters.
+- **Stateless Design** — No session affinity required; any pod can handle any request. State is externalized to Azure services (DB, Redis, etc.) when needed.
+
+### Reliability
+- **Health Probes** — Liveness (every 15s) restarts dead pods. Readiness (every 10s) removes unhealthy pods from the service load balancer.
+- **Rolling Updates** — `maxUnavailable: 0, maxSurge: 1` ensures zero-downtime deployments. One new pod spins up before any old pod is terminated.
+- **Container Restart Policy** — `Always` ensures failed containers automatically recover without manual intervention.
+
+### Security
+- **Immutable Infrastructure** — No SSH into pods. All configuration is baked into the container image or injected via environment variables.
+- **Image Pull Policy** — `IfNotPresent` prevents unnecessary registry pulls and avoids pulling tampered images in production.
+- **Principle of Least Privilege** — Containers run without elevated privileges. Network policies can further restrict inter-pod communication.
+
+### Observability
+- **Health Endpoint** — `/health` returns HTTP 200 when the application is ready, integrated with both K8s probes and Azure Monitor.
+- **Structured Logging** — ASP.NET Core logs are emitted to stdout/stderr, collected by Azure Monitor or Fluentd, and searchable in Log Analytics.
+- **Distributed Tracing** — The service is instrumented for OpenTelemetry, enabling end-to-end trace correlation across microservices.
+
+### CI/CD
+- **Conditional Pipelines** — Build and test run on every PR. Azure deployment steps activate only when credentials are configured, allowing fork-friendly contribution.
+- **Idempotent Deployments** — `kubectl apply` ensures manifests are declarative. Re-running the pipeline produces the same result.
+- **GitOps Ready** — All Kubernetes manifests are versioned in this repository, enabling ArgoCD or Flux-based GitOps workflows.
+
 ## What's Demonstrated
 
 | Capability | Live Azure | Local (Kind) |
