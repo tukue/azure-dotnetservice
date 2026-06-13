@@ -1,0 +1,119 @@
+name: Build and Deploy to AKS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  DOTNET_VERSION: '8.0.x'
+  IMAGE_NAME: cloud-native-microservice
+  ACR_NAME: ${{ secrets.ACR_LOGIN_SERVER || 'demo-registry' }}
+  AKS_CLUSTER_NAME: ${{ secrets.AKS_CLUSTER_NAME || 'demo-cluster' }}
+  AKS_RESOURCE_GROUP: ${{ secrets.AKS_RESOURCE_GROUP || 'demo-rg' }}
+  NAMESPACE: default
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restore
+        run: dotnet restore src/CloudNativeMicroservice/CloudNativeMicroservice.csproj
+
+      - name: Build
+        run: dotnet build src/CloudNativeMicroservice/CloudNativeMicroservice.csproj -c Release --no-restore
+
+      - name: Test
+        run: dotnet test src/CloudNativeMicroservice/CloudNativeMicroservice.csproj -c Release --no-build --verbosity normal
+
+      - name: Publish
+        run: dotnet publish src/CloudNativeMicroservice/CloudNativeMicroservice.csproj -c Release -o publish
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: app
+          path: publish/
+
+  containerize:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build -t ${{ env.IMAGE_NAME }}:${{ github.sha }} .
+          docker tag ${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.IMAGE_NAME }}:latest
+          echo "Image built successfully: ${{ env.IMAGE_NAME }}:${{ github.sha }}"
+
+      - name: Log in to ACR and push
+        if: secrets.ACR_LOGIN_SERVER != ''
+        run: |
+          az acr login --name ${{ env.ACR_NAME }}
+          docker tag ${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker tag ${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
+
+      - name: Dry-run — skip ACR push (no credentials)
+        if: secrets.ACR_LOGIN_SERVER == ''
+        run: |
+          echo "::warning::No ACR credentials configured — skipping registry push."
+          echo "Image tagged locally as: ${{ env.IMAGE_NAME }}:${{ github.sha }}"
+
+  deploy-to-aks:
+    needs: containerize
+    runs-on: ubuntu-latest
+    if: secrets.AKS_CLUSTER_NAME != ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Set AKS context
+        run: |
+          az aks get-credentials \
+            --resource-group ${{ env.AKS_RESOURCE_GROUP }} \
+            --name ${{ env.AKS_CLUSTER_NAME }} \
+            --overwrite-existing
+
+      - name: Apply Kubernetes manifests
+        run: |
+          kubectl apply -f deploy/k8s/deployment.yaml --namespace ${{ env.NAMESPACE }}
+          kubectl apply -f deploy/k8s/service.yaml --namespace ${{ env.NAMESPACE }}
+          kubectl rollout status deployment/cloud-native-microservice --namespace ${{ env.NAMESPACE }}
+
+  dry-run-summary:
+    needs: [build, containerize]
+    runs-on: ubuntu-latest
+    if: always() && (secrets.AKS_CLUSTER_NAME == '' || secrets.AZURE_CREDENTIALS == '')
+    steps:
+      - name: Print deployment preview
+        run: |
+          echo "══════════════════════════════════════════════"
+          echo "  DEPLOYMENT PREVIEW (dry-run mode)"
+          echo "══════════════════════════════════════════════"
+          echo "  Image:      ${{ env.IMAGE_NAME }}:local"
+          echo "  Service:    cloud-native-microservice"
+          echo "  Port:       8080"
+          echo "  Replicas:   3"
+          echo "  Strategy:   RollingUpdate"
+          echo "══════════════════════════════════════════════"
+          echo ""
+          echo "To deploy locally with Kind:"
+          echo "  make kind-up"
+          echo "  make kind-deploy"
+          echo "  make kind-test"

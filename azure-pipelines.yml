@@ -1,0 +1,121 @@
+trigger:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  dotnetVersion: '8.0.x'
+  imageRepository: 'cloud-native-microservice'
+  dockerRegistryServiceConnection: '$(dockerRegistryServiceConnection)'
+  containerRegistry: '$(acrLoginServer)'
+  dockerfilePath: '$(Build.SourcesDirectory)/Dockerfile'
+  tag: '$(Build.BuildId)'
+  aksClusterName: '$(aksClusterName)'
+  aksResourceGroup: '$(aksResourceGroup)'
+  kubernetesNamespace: 'default'
+  isAzureConfigured: $[eq(variables['acrLoginServer'], '')]
+
+stages:
+  - stage: Build
+    displayName: Build .NET Application
+    jobs:
+      - job: BuildAndTest
+        displayName: Build, Test, and Containerize
+        steps:
+          - task: UseDotNet@2
+            displayName: Setup .NET SDK
+            inputs:
+              packageType: 'sdk'
+              version: '$(dotnetVersion)'
+
+          - script: |
+              dotnet restore src/CloudNativeMicroservice/CloudNativeMicroservice.csproj
+              dotnet build src/CloudNativeMicroservice/CloudNativeMicroservice.csproj -c Release --no-restore
+            displayName: Build application
+
+          - script: |
+              dotnet test src/CloudNativeMicroservice/CloudNativeMicroservice.csproj -c Release --no-build --verbosity normal
+            displayName: Run tests
+
+          - script: |
+              docker build -f $(dockerfilePath) -t $(imageRepository):$(tag) .
+              docker tag $(imageRepository):$(tag) $(imageRepository):latest
+            displayName: Build Docker image locally
+
+          - task: Docker@2
+            displayName: Push to ACR (requires Azure connection)
+            condition: ne(variables['acrLoginServer'], '')
+            inputs:
+              command: push
+              repository: $(imageRepository)
+              containerRegistry: $(dockerRegistryServiceConnection)
+              tags: |
+                $(tag)
+                latest
+
+          - script: |
+              echo "╔════════════════════════════════════════╗"
+              echo "║  ACR not configured — image available  ║"
+              echo "║  locally as $(imageRepository):$(tag)   ║"
+              echo "╚════════════════════════════════════════╝"
+            displayName: Local image notice
+            condition: eq(variables['acrLoginServer'], '')
+
+  - stage: Deploy
+    displayName: Deploy to Kubernetes
+    dependsOn: Build
+    condition: and(succeeded(), ne(variables['aksClusterName'], ''))
+    jobs:
+      - deployment: DeployToAKS
+        displayName: Deploy to Azure Kubernetes Service
+        environment: 'aks-production'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: KubernetesManifest@1
+                  displayName: Deploy to AKS
+                  inputs:
+                    action: 'deploy'
+                    connectionType: 'azureResourceManager'
+                    azureSubscriptionConnection: '$(azureServiceConnection)'
+                    azureResourceGroup: $(aksResourceGroup)
+                    kubernetesCluster: $(aksClusterName)
+                    namespace: $(kubernetesNamespace)
+                    manifests: |
+                      deploy/k8s/deployment.yaml
+                      deploy/k8s/service.yaml
+                    imagePullSecrets: |
+                      $(imagePullSecret)
+                    containers: |
+                      $(containerRegistry)/$(imageRepository):$(tag)
+
+  - stage: DryRunSummary
+    displayName: Deployment Summary (dry-run)
+    dependsOn: Build
+    condition: and(succeeded(), eq(variables['aksClusterName'], ''))
+    jobs:
+      - job: Summary
+        displayName: Print deployment preview
+        steps:
+          - script: |
+              echo "══════════════════════════════════════════════"
+              echo "  DEPLOYMENT PREVIEW (dry-run mode)"
+              echo "══════════════════════════════════════════════"
+              echo "  Image:      $(imageRepository):$(tag)"
+              echo "  Cluster:    $(aksClusterName)"
+              echo "  Manifests:  deploy/k8s/"
+              echo "══════════════════════════════════════════════"
+              echo ""
+              echo "  Azure is not configured — here's what would deploy:"
+              echo ""
+              echo "  Service:  cloud-native-microservice (LoadBalancer, :80)"
+              echo "  Replicas: 3 (RollingUpdate)"
+              echo "  Probes:   /health (liveness + readiness)"
+              echo "  Limits:   250m CPU / 256Mi memory"
+              echo ""
+              echo "  To test locally: run 'make kind-demo'"
+            displayName: Dry-run summary
