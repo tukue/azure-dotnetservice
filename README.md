@@ -17,44 +17,59 @@ A showcase repository demonstrating containerized .NET microservice deployment t
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                        CI/CD Pipeline (GitHub Actions)                    │
-│                                                                          │
-│   ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌────────────────┐    │
-│   │  Build   │───▶│   Test   │───▶│Container │───▶│  Deploy to     │    │
-│   │  .NET    │    │  xUnit   │    │  Build   │    │  AKS / Kind    │    │
-│   └──────────┘    └──────────┘    └──────────┘    └────────────────┘    │
-│                                          │                              │
-│                                          ▼                              │
-│                                    ┌──────────┐                         │
-│                                    │   ACR    │                         │
-│                                    │(Registry)│                         │
-│                                    └──────────┘                         │
-│                                                                          │
-└──────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│                      Azure Kubernetes Service (AKS)                      │
-│                                                                          │
-│   ┌──────────────────────────────────────────────────────────────┐       │
-│   │  ┌──────────────────────┐  ┌──────────────────────┐          │       │
-│   │  │  Pod                 │  │  Pod                 │   ...    │       │
-│   │  │  ┌────────────────┐  │  │  ┌────────────────┐  │          │       │
-│   │  │  │ .NET Microsvc. │  │  │  │ .NET Microsvc. │  │  3x      │       │
-│   │  │  │ port 8080      │  │  │  │ port 8080      │  │  replicas │       │
-│   │  │  └────────────────┘  │  │  └────────────────┘  │          │       │
-│   │  └──────────────────────┘  └──────────────────────┘          │       │
-│   │                                                              │       │
-│   │  ┌──────────────────────────────────────────────────────┐    │       │
-│   │  │  Service (LoadBalancer)          port 80 ──▶ 8080    │    │       │
-│   │  └──────────────────────────────────────────────────────┘    │       │
-│   │                                                              │       │
-│   │  Probes:  /health (liveness + readiness)                     │       │
-│   │  Strategy: RollingUpdate (maxUnavailable: 0)                  │       │
-│   └──────────────────────────────────────────────────────────────┘       │
-└──────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Developer["Developer"]
+        DEV[git push]
+    end
+
+    subgraph GH["GitHub / GitHub Actions"]
+        direction TB
+        BUILD[Build .NET] --> TEST[Run Tests]
+        TEST --> DOCKER[Build Docker Image]
+        DOCKER --> PUSH[Push to ACR]
+        DOCKER --> DRYRUN[Local: Kind Deploy]
+    end
+
+    subgraph ACR["Azure Container Registry"]
+        REGISTRY[(Container Images)]
+    end
+
+    subgraph AZDO["Azure Pipelines"]
+        AZBUILD[Build Stage] --> AZDEPLOY[Deploy Stage]
+    end
+
+    subgraph AKS["Azure Kubernetes Service"]
+        direction TB
+        subgraph ControlPlane["Control Plane"]
+            API[API Server]
+        end
+        subgraph Nodes["Node Pool"]
+            direction TB
+            P1[Pod: .NET Microservice<br/>port 8080]
+            P2[Pod: .NET Microservice<br/>port 8080]
+            P3[Pod: .NET Microservice<br/>port 8080]
+        end
+        subgraph Services["Networking"]
+            SVC[LoadBalancer Service<br/>port 80 → 8080]
+        end
+        subgraph Health["Observability"]
+            LIV[Liveness Probe<br/>/health : 15s]
+            READY[Readiness Probe<br/>/health : 10s]
+        end
+    end
+
+    subgraph Local["Local Development (Kind)"]
+        KIND[Kind Cluster<br/>Kubernetes-in-Docker]
+    end
+
+    DEV --> BUILD
+    DEV --> AZBUILD
+    PUSH --> REGISTRY
+    REGISTRY --> AKS
+    REGISTRY --> AZDEPLOY
+    GH --> AKS
+    GH --> Local
 ```
 
 ## Design Considerations
