@@ -9,6 +9,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+CLUSTER_NAME="${1:-microservice-cluster}"
+
 echo "══════════════════════════════════════════════"
 echo "  Cloud-Native .NET Microservice — Local Demo"
 echo "══════════════════════════════════════════════"
@@ -28,14 +30,14 @@ docker build -t cloud-native-microservice:local .
 # Step 3: Create Kind cluster
 echo ""
 echo "▸ Step 3/5: Creating Kind cluster..."
-if ! kind get clusters 2>/dev/null | grep -q "^demo$"; then
-  kind create cluster --name demo
+if ! kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
+  kind create cluster --name "${CLUSTER_NAME}"
 fi
 
 # Step 4: Load image and deploy
 echo ""
 echo "▸ Step 4/5: Deploying to Kind..."
-kind load docker-image cloud-native-microservice:local --name demo
+kind load docker-image cloud-native-microservice:local --name "${CLUSTER_NAME}"
 
 # Patch the image tag in deployment.yaml (save original)
 cp deploy/k8s/deployment.yaml deploy/k8s/deployment.yaml.bak
@@ -68,6 +70,6 @@ kill $PF_PID 2>/dev/null || true
 echo ""
 echo "══════════════════════════════════════════════"
 echo "  Demo complete!"
-echo "  Run 'kind delete cluster --name demo' to"
+  echo "  Run 'kind delete cluster --name ${CLUSTER_NAME}' to"
 echo "  tear down the local cluster."
 echo "══════════════════════════════════════════════"

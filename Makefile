@@ -25,22 +25,26 @@ docker-run: docker-build
 
 # ── Kind (Kubernetes in Docker) ──────────────────────────
 
+CLUSTER_NAME ?= microservice-cluster
+
 kind-up:
-	@if ! kind get clusters 2>/dev/null | grep -q "^demo$$"; then \
-		echo "Creating Kind cluster 'demo'..."; \
-		kind create cluster --name demo; \
+	@if ! kind get clusters 2>/dev/null | grep -q "^$(CLUSTER_NAME)$$"; then \
+		echo "Creating Kind cluster '$(CLUSTER_NAME)'..."; \
+		kind create cluster --name $(CLUSTER_NAME); \
 	else \
-		echo "Kind cluster 'demo' already exists."; \
+		echo "Kind cluster '$(CLUSTER_NAME)' already exists."; \
 	fi
 
 kind-load: docker-build kind-up
-	kind load docker-image $(APP_NAME):$(TAG) --name demo
+	kind load docker-image $(APP_NAME):$(TAG) --name $(CLUSTER_NAME)
 
 kind-deploy: kind-load
+	cp $(K8S_DIR)/deployment.yaml $(K8S_DIR)/deployment.yaml.bak
 	sed -i "s|__IMAGE__|$(APP_NAME):$(TAG)|g" $(K8S_DIR)/deployment.yaml
 	kubectl apply -f $(K8S_DIR)/deployment.yaml
 	kubectl apply -f $(K8S_DIR)/service.yaml
 	kubectl rollout status deployment/$(APP_NAME) --timeout=120s
+	mv $(K8S_DIR)/deployment.yaml.bak $(K8S_DIR)/deployment.yaml
 	@echo ""
 	@echo "Application deployed! Access it via:"
 	@kubectl port-forward svc/$(APP_NAME) 8080:80
@@ -63,7 +67,7 @@ kind-down:
 	@echo "Cleaned up."
 
 kind-destroy:
-	kind delete cluster --name demo
+	kind delete cluster --name $(CLUSTER_NAME)
 
 # ── Clean ─────────────────────────────────────────────────
 

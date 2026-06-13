@@ -22,6 +22,7 @@ spec:
       containers:
         - name: cloud-native-microservice
           image: __IMAGE__
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
           env:
