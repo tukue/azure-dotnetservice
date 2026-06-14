@@ -113,22 +113,25 @@ flowchart TB
 ```
 .
 ├── src/CloudNativeMicroservice/      # .NET 8 Web API
+├── argocd/                           # ArgoCD declarative config
+│   ├── project.yaml                  # AppProject (RBAC scoping)
+│   └── application.yaml              # Application (sync policy, ignore diffs)
 ├── .github/workflows/deploy.yml      # GitHub Actions pipeline
 ├── azure-pipelines.yml               # Azure DevOps pipeline
 ├── deploy/k8s/
 │   ├── base/                         # Shared Kubernetes manifests
 │   │   ├── kustomization.yaml
-│   │   ├── namespace.yaml
-│   │   ├── deployment.yaml
-│   │   └── service.yaml
+│   │   ├── namespace.yaml            # sync-wave: 0
+│   │   ├── deployment.yaml           # sync-wave: 1
+│   │   └── service.yaml              # sync-wave: 1
 │   ├── overlays/
 │   │   ├── dev/                      # Dev environment (1 replica)
 │   │   │   └── kustomization.yaml
 │   │   ├── prod/                     # Production (3 replicas, HPA, PDB, NetworkPolicy)
 │   │   │   ├── kustomization.yaml
-│   │   │   ├── hpa.yaml
-│   │   │   ├── pdb.yaml
-│   │   │   └── network-policy.yaml
+│   │   │   ├── hpa.yaml              # sync-wave: 2
+│   │   │   ├── pdb.yaml              # sync-wave: 2
+│   │   │   └── network-policy.yaml   # sync-wave: 2
 │   │   └── kind/                     # Local Kind overlay (local image tag)
 │   │       └── kustomization.yaml
 │   ├── deployment.yaml               # Standalone manifest (backward compat)
@@ -214,20 +217,38 @@ This repository implements **GitOps** practices out of the box. Kubernetes manif
 | **Drift detection ready** | Namespace, labels, and selectors structured for ArgoCD/Flux sync |
 | **CI/CD idempotency** | `kustomize build | kubectl apply -f -` is safe to re-run |
 
-### Adopting ArgoCD or Flux
+### Adopting ArgoCD
 
-Point your GitOps operator at one of the Kustomize overlays:
+The `argocd/` directory contains declarative manifests to register the application with ArgoCD. Update the repo URL in `application.yaml` to match your fork, then apply:
 
-**ArgoCD:**
 ```bash
-argocd app create microservice \
-  --repo https://github.com/your-org/azure-dotnetservice.git \
-  --path deploy/k8s/overlays/prod \
-  --dest-server https://YOUR_CLUSTER_API \
-  --dest-namespace cloud-native-microservice
+kubectl apply -f argocd/project.yaml
+kubectl apply -f argocd/application.yaml
 ```
 
-**Flux:**
+ArgoCD will sync the `deploy/k8s/overlays/prod` Kustomize overlay and automatically:
+- Create the `cloud-native-microservice` namespace (sync-wave 0)
+- Deploy the Deployment and Service (sync-wave 1)
+- Apply HPA, PDB, and NetworkPolicy (sync-wave 2)
+- Prune resources that no longer exist in Git
+- Self-heal if manual changes are detected
+
+#### Sync Wave Ordering
+
+| Wave | Resources | Purpose |
+|------|-----------|---------|
+| 0 | Namespace | Foundation — must exist before anything else |
+| 1 | Deployment, Service | Core workload + networking |
+| 2 | HPA, PDB, NetworkPolicy | Auxiliary — depend on the deployment existing |
+
+#### ignoring Differences
+
+The Application is configured to ignore fields that the cluster may auto-populate differently than Git:
+- `spec.replicas` on Deployments (allows HPA to manage replica count)
+- `spec.metrics` on HPAs (allows cluster-specific metric variations)
+
+### Adopting Flux
+
 ```bash
 flux bootstrap github \
   --owner=your-org \
@@ -278,3 +299,5 @@ flowchart LR
 | `overlays/prod/hpa.yaml` | CPU/memory-based Horizontal Pod Autoscaler (3–10 replicas) |
 | `overlays/prod/pdb.yaml` | Pod Disruption Budget (min 2 available during voluntary disruptions) |
 | `overlays/prod/network-policy.yaml` | Ingress traffic restricted to same-namespace pods only |
+| `argocd/project.yaml` | ArgoCD AppProject with source/destination RBAC scoping |
+| `argocd/application.yaml` | ArgoCD Application with sync policy, retry, and ignore-differences |

@@ -1,0 +1,17 @@
+apiVersion: argoproj.io/v1beta1
+kind: AppProject
+metadata:
+  name: cloud-native-microservice
+  namespace: argocd
+spec:
+  description: Cloud-native .NET microservice
+  sourceRepos:
+    - https://github.com/tukue/azure-dotnetservice.git
+  destinations:
+    - namespace: cloud-native-microservice
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: ''
+      kind: Namespace
+  orphanedResources:
+    warn: true

@@ -3,6 +3,8 @@ kind: PodDisruptionBudget
 metadata:
   name: cloud-native-microservice
   namespace: cloud-native-microservice
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   minAvailable: 2
   selector:

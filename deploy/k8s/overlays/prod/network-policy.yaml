@@ -3,6 +3,8 @@ kind: NetworkPolicy
 metadata:
   name: cloud-native-microservice
   namespace: cloud-native-microservice
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
 spec:
   podSelector:
     matchLabels:
