@@ -2,7 +2,7 @@
 
 APP_NAME   := cloud-native-microservice
 K8S_DIR    := deploy/k8s
-TAG        := latest
+TAG        := local
 
 # ── .NET ──────────────────────────────────────────────────
 
@@ -39,23 +39,24 @@ kind-load: docker-build kind-up
 	kind load docker-image $(APP_NAME):$(TAG) --name $(CLUSTER_NAME)
 
 kind-deploy: kind-load
-	kustomize build $(K8S_DIR)/overlays/kind | kubectl apply -f -
+	kubectl kustomize $(K8S_DIR)/overlays/kind | kubectl apply -f -
 	kubectl rollout status deployment/$(APP_NAME) -n $(APP_NAME) --timeout=120s
 	@echo ""
 	@echo "Application deployed! Access it via:"
-	@kubectl port-forward -n $(APP_NAME) svc/$(APP_NAME) 8080:80
+	@echo "  kubectl port-forward -n $(APP_NAME) svc/$(APP_NAME) 8080:80"
 
 kind-test:
 	@echo ""
 	@echo "Testing endpoints..."
-	@sleep 3
 	@kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=$(APP_NAME) -n $(APP_NAME) --timeout=60s
-	@kubectl port-forward -n $(APP_NAME) svc/$(APP_NAME) 8080:80 &
-	@PF_PID=$$!; \
+	@kubectl port-forward -n $(APP_NAME) svc/$(APP_NAME) 8080:80 & \
+	PF_PID=$$!; \
 	sleep 3; \
+	echo "── Weather API ──────────────────────────────"; \
 	curl -s http://localhost:8080/api/weather | head -c 500; \
 	echo ""; \
-	curl -s -o /dev/null -w "Health check: %{http_code}\n" http://localhost:8080/health; \
+	echo "── Health Check ────────────────────────────"; \
+	curl -s -o /dev/null -w "HTTP %{http_code}\n" http://localhost:8080/health; \
 	kill $$PF_PID 2>/dev/null || true
 
 kind-demo: kind-deploy kind-test
@@ -74,13 +75,13 @@ kind-destroy:
 # ── Kustomize ────────────────────────────────────────────
 
 kustomize-dev:
-	kustomize build $(K8S_DIR)/overlays/dev
+	kubectl kustomize $(K8S_DIR)/overlays/dev
 
 kustomize-prod:
-	kustomize build $(K8S_DIR)/overlays/prod
+	kubectl kustomize $(K8S_DIR)/overlays/prod
 
 kustomize-kind:
-	kustomize build $(K8S_DIR)/overlays/kind
+	kubectl kustomize $(K8S_DIR)/overlays/kind
 
 # ── Clean ─────────────────────────────────────────────────
 

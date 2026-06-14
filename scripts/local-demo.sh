@@ -44,7 +44,7 @@ echo ""
 echo "▸ Step 4/5: Deploying to Kind via Kustomize..."
 kind load docker-image "${APP_NAME}:local" --name "${CLUSTER_NAME}"
 
-kustomize build "${KUSTOMIZE_OVERLAY}" | kubectl apply -f -
+kubectl kustomize "${KUSTOMIZE_OVERLAY}" | kubectl apply -f -
 kubectl rollout status "deployment/${APP_NAME}" -n "${APP_NAME}" --timeout=120s
 
 # Step 5: Test
