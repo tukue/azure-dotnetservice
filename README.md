@@ -114,8 +114,11 @@ flowchart TB
 .
 ├── src/CloudNativeMicroservice/      # .NET 8 Web API
 ├── argocd/                           # ArgoCD declarative config
+│   ├── kustomization.yaml            # Kustomize bundle for all ArgoCD resources
 │   ├── project.yaml                  # AppProject (RBAC scoping)
-│   └── application.yaml              # Application (sync policy, ignore diffs)
+│   ├── application.yaml              # Production Application (sync policy, ignore diffs)
+│   ├── application-dev.yaml          # Dev environment Application
+│   └── application-kind.yaml         # Local Kind Application
 ├── .github/workflows/deploy.yml      # GitHub Actions pipeline
 ├── azure-pipelines.yml               # Azure DevOps pipeline
 ├── deploy/k8s/
@@ -219,11 +222,17 @@ This repository implements **GitOps** practices out of the box. Kubernetes manif
 
 ### Adopting ArgoCD
 
-The `argocd/` directory contains declarative manifests to register the application with ArgoCD. Update the repo URL in `application.yaml` to match your fork, then apply:
+The `argocd/` directory contains declarative manifests to register the application with ArgoCD. Update the repo URL in the application manifests to match your fork, then apply:
 
 ```bash
+# Apply all ArgoCD resources at once via Kustomize
+make argocd-apply
+
+# Or apply individually
 kubectl apply -f argocd/project.yaml
-kubectl apply -f argocd/application.yaml
+kubectl apply -f argocd/application.yaml       # production
+kubectl apply -f argocd/application-dev.yaml    # development
+kubectl apply -f argocd/application-kind.yaml   # local Kind
 ```
 
 ArgoCD will sync the `deploy/k8s/overlays/prod` Kustomize overlay and automatically:
@@ -300,4 +309,7 @@ flowchart LR
 | `overlays/prod/pdb.yaml` | Pod Disruption Budget (min 2 available during voluntary disruptions) |
 | `overlays/prod/network-policy.yaml` | Ingress traffic restricted to same-namespace pods only |
 | `argocd/project.yaml` | ArgoCD AppProject with source/destination RBAC scoping |
-| `argocd/application.yaml` | ArgoCD Application with sync policy, retry, and ignore-differences |
+| `argocd/kustomization.yaml` | Kustomize bundle to apply all ArgoCD resources at once |
+| `argocd/application.yaml` | ArgoCD Application (prod) with sync policy, retry, and ignore-differences |
+| `argocd/application-dev.yaml` | ArgoCD Application (dev) pointing to dev overlay |
+| `argocd/application-kind.yaml` | ArgoCD Application (kind) pointing to local overlay |

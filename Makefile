@@ -72,6 +72,29 @@ kind-down:
 kind-destroy:
 	kind delete cluster --name $(CLUSTER_NAME)
 
+# ── ArgoCD ────────────────────────────────────────────────
+
+ARGOCD_DIR := argocd
+
+argocd-apply:
+	kubectl apply -k $(ARGOCD_DIR)
+
+argocd-apply-prod:
+	kubectl apply -f $(ARGOCD_DIR)/project.yaml
+	kubectl apply -f $(ARGOCD_DIR)/application.yaml
+
+argocd-apply-dev:
+	kubectl apply -f $(ARGOCD_DIR)/application-dev.yaml
+
+argocd-apply-kind:
+	kubectl apply -f $(ARGOCD_DIR)/application-kind.yaml
+
+argocd-delete:
+	kubectl delete -k $(ARGOCD_DIR)
+
+argocd-status:
+	kubectl get applications -n argocd
+
 # ── Kustomize ────────────────────────────────────────────
 
 kustomize-dev:
