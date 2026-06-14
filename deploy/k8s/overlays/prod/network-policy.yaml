@@ -1,0 +1,18 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cloud-native-microservice
+  namespace: cloud-native-microservice
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: cloud-native-microservice
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cloud-native-microservice
+      ports:
+        - port: 8080

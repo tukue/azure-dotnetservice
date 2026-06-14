@@ -3,13 +3,18 @@
 # Local demo script — runs the full CI/CD flow locally
 # without an Azure subscription.
 #
-# Prerequisites: docker, kind, kubectl, dotnet SDK 8.0
+# Uses Kustomize overlays to deploy to Kind, following
+# GitOps best practices.
+#
+# Prerequisites: docker, kind, kubectl, kustomize, dotnet SDK 8.0
 # ──────────────────────────────────────────────────────────
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 CLUSTER_NAME="${1:-microservice-cluster}"
+APP_NAME="cloud-native-microservice"
+KUSTOMIZE_OVERLAY="deploy/k8s/overlays/kind"
 
 echo "══════════════════════════════════════════════"
 echo "  Cloud-Native .NET Microservice — Local Demo"
@@ -18,14 +23,14 @@ echo "════════════════════════�
 # Step 1: Build and test .NET app
 echo ""
 echo "▸ Step 1/5: Building .NET application..."
-dotnet restore src/CloudNativeMicroservice/CloudNativeMicroservice.csproj
-dotnet build src/CloudNativeMicroservice/CloudNativeMicroservice.csproj -c Release --no-restore
-dotnet test src/CloudNativeMicroservice/CloudNativeMicroservice.csproj -c Release --no-build --verbosity normal
+dotnet restore "src/${APP_NAME}/${APP_NAME}.csproj"
+dotnet build "src/${APP_NAME}/${APP_NAME}.csproj" -c Release --no-restore
+dotnet test "src/${APP_NAME}/${APP_NAME}.csproj" -c Release --no-build --verbosity normal
 
 # Step 2: Build Docker image
 echo ""
 echo "▸ Step 2/5: Building Docker image..."
-docker build -t cloud-native-microservice:local .
+docker build -t "${APP_NAME}:local" .
 
 # Step 3: Create Kind cluster
 echo ""
@@ -34,26 +39,19 @@ if ! kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
   kind create cluster --name "${CLUSTER_NAME}"
 fi
 
-# Step 4: Load image and deploy
+# Step 4: Load image and deploy via Kustomize
 echo ""
-echo "▸ Step 4/5: Deploying to Kind..."
-kind load docker-image cloud-native-microservice:local --name "${CLUSTER_NAME}"
+echo "▸ Step 4/5: Deploying to Kind via Kustomize..."
+kind load docker-image "${APP_NAME}:local" --name "${CLUSTER_NAME}"
 
-# Patch the image tag in deployment.yaml (save original)
-cp deploy/k8s/deployment.yaml deploy/k8s/deployment.yaml.bak
-sed -i "s|__IMAGE__|cloud-native-microservice:local|g" deploy/k8s/deployment.yaml
-
-kubectl apply -f deploy/k8s/deployment.yaml
-kubectl apply -f deploy/k8s/service.yaml
-kubectl rollout status deployment/cloud-native-microservice --timeout=120s
-
-# Restore original
-mv deploy/k8s/deployment.yaml.bak deploy/k8s/deployment.yaml
+kustomize build "${KUSTOMIZE_OVERLAY}" | kubectl apply -f -
+kubectl rollout status "deployment/${APP_NAME}" -n "${APP_NAME}" --timeout=120s
 
 # Step 5: Test
 echo ""
 echo "▸ Step 5/5: Testing endpoints..."
-kubectl port-forward svc/cloud-native-microservice 8080:80 &
+kubectl wait --for=condition=ready pod -l "app.kubernetes.io/name=${APP_NAME}" -n "${APP_NAME}" --timeout=60s
+kubectl port-forward -n "${APP_NAME}" "svc/${APP_NAME}" 8080:80 &
 PF_PID=$!
 sleep 3
 
@@ -70,6 +68,6 @@ kill $PF_PID 2>/dev/null || true
 echo ""
 echo "══════════════════════════════════════════════"
 echo "  Demo complete!"
-  echo "  Run 'kind delete cluster --name ${CLUSTER_NAME}' to"
+echo "  Run 'kind delete cluster --name ${CLUSTER_NAME}' to"
 echo "  tear down the local cluster."
 echo "══════════════════════════════════════════════"

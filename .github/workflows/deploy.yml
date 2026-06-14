@@ -6,17 +6,20 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      gitops:
+        description: 'GitOps mode — skip direct deploy, only build + push + update manifest'
+        required: true
+        default: false
+        type: boolean
 
 env:
   DOTNET_VERSION: '8.0.x'
   IMAGE_NAME: cloud-native-microservice
-  ACR_NAME: ${{ secrets.ACR_LOGIN_SERVER || 'demo-registry' }}
-  AKS_CLUSTER_NAME: ${{ secrets.AKS_CLUSTER_NAME || 'demo-cluster' }}
-  AKS_RESOURCE_GROUP: ${{ secrets.AKS_RESOURCE_GROUP || 'demo-rg' }}
-  NAMESPACE: default
+  NAMESPACE: cloud-native-microservice
 
 jobs:
-  build:
+  build-and-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,8 +47,8 @@ jobs:
           name: app
           path: publish/
 
-  containerize:
-    needs: build
+  containerize-and-push:
+    needs: build-and-test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,27 +57,61 @@ jobs:
         run: |
           docker build -t ${{ env.IMAGE_NAME }}:${{ github.sha }} .
           docker tag ${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.IMAGE_NAME }}:latest
-          echo "Image built successfully: ${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          echo "Image built: ${{ env.IMAGE_NAME }}:${{ github.sha }}"
 
-      - name: Log in to ACR and push
+      - name: Push to ACR
         if: secrets.ACR_LOGIN_SERVER != ''
         run: |
-          az acr login --name ${{ env.ACR_NAME }}
-          docker tag ${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          docker tag ${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
-          docker push ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          docker push ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
+          az acr login --name ${{ secrets.ACR_LOGIN_SERVER }}
+          docker tag ${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            ${{ secrets.ACR_LOGIN_SERVER }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker tag ${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            ${{ secrets.ACR_LOGIN_SERVER }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
+          docker push ${{ secrets.ACR_LOGIN_SERVER }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ secrets.ACR_LOGIN_SERVER }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
 
-      - name: Dry-run — skip ACR push (no credentials)
+      - name: Dry-run notice (no ACR credentials)
         if: secrets.ACR_LOGIN_SERVER == ''
         run: |
-          echo "::warning::No ACR credentials configured — skipping registry push."
-          echo "Image tagged locally as: ${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          echo "::warning::No ACR credentials — skipping registry push."
+          echo "Image: ${{ env.IMAGE_NAME }}:${{ github.sha }}"
 
-  deploy-to-aks:
-    needs: containerize
+  # ── GitOps: update image tag for ArgoCD/Flux sync ──
+  update-gitops-manifest:
+    needs: containerize-and-push
+    if: |
+      github.ref == 'refs/heads/main' &&
+      secrets.ACR_LOGIN_SERVER != ''
     runs-on: ubuntu-latest
-    if: secrets.AKS_CLUSTER_NAME != ''
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Update image tag in Kustomize prod overlay
+        run: |
+          sed -i "s|newTag:.*|newTag: ${{ github.sha }}|g" \
+            deploy/k8s/overlays/prod/kustomization.yaml
+
+      - name: Commit manifest update
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add deploy/k8s/overlays/prod/kustomization.yaml
+          git diff --staged --quiet || \
+            git commit -m "chore(release): update image tag to ${{ github.sha }}"
+          git push
+
+  # ── Direct deploy mode (non-GitOps, backward compat) ──
+  deploy-to-aks:
+    needs: containerize-and-push
+    if: |
+      github.ref == 'refs/heads/main' &&
+      secrets.ACR_LOGIN_SERVER != '' &&
+      secrets.AKS_CLUSTER_NAME != '' &&
+      secrets.AZURE_CREDENTIALS != '' &&
+      (github.event_name != 'workflow_dispatch' || github.event.inputs.gitops != 'true')
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -86,34 +123,40 @@ jobs:
       - name: Set AKS context
         run: |
           az aks get-credentials \
-            --resource-group ${{ env.AKS_RESOURCE_GROUP }} \
-            --name ${{ env.AKS_CLUSTER_NAME }} \
+            --resource-group ${{ secrets.AKS_RESOURCE_GROUP }} \
+            --name ${{ secrets.AKS_CLUSTER_NAME }} \
             --overwrite-existing
 
-      - name: Apply Kubernetes manifests
+      - name: Deploy with Kustomize
         run: |
-          kubectl apply -f deploy/k8s/deployment.yaml --namespace ${{ env.NAMESPACE }}
-          kubectl apply -f deploy/k8s/service.yaml --namespace ${{ env.NAMESPACE }}
-          kubectl rollout status deployment/cloud-native-microservice --namespace ${{ env.NAMESPACE }}
+          kustomize build deploy/k8s/overlays/prod | kubectl apply -f -
+          kubectl rollout status deployment/${{ env.IMAGE_NAME }} \
+            -n ${{ env.NAMESPACE }} --timeout=180s
 
+  # ── Summary ─────────────────────────────────────────
   dry-run-summary:
-    needs: [build, containerize]
+    needs: [build-and-test, containerize-and-push]
     runs-on: ubuntu-latest
-    if: always() && (secrets.AKS_CLUSTER_NAME == '' || secrets.AZURE_CREDENTIALS == '')
+    if: always()
     steps:
-      - name: Print deployment preview
+      - name: Deployment summary
         run: |
           echo "══════════════════════════════════════════════"
-          echo "  DEPLOYMENT PREVIEW (dry-run mode)"
+          echo "  CI/CD Pipeline Summary"
           echo "══════════════════════════════════════════════"
-          echo "  Image:      ${{ env.IMAGE_NAME }}:local"
-          echo "  Service:    cloud-native-microservice"
-          echo "  Port:       8080"
-          echo "  Replicas:   3"
-          echo "  Strategy:   RollingUpdate"
-          echo "══════════════════════════════════════════════"
+          echo "  Image:      ${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          echo "  Namespace:  ${{ env.NAMESPACE }}"
+          echo "  Branch:     ${{ github.ref }}"
+          echo "  Event:      ${{ github.event_name }}"
           echo ""
-          echo "To deploy locally with Kind:"
-          echo "  make kind-up CLUSTER_NAME=microservice-cluster"
-          echo "  make kind-deploy CLUSTER_NAME=microservice-cluster"
-          echo "  make kind-test CLUSTER_NAME=microservice-cluster"
+          echo "  Kustomize overlays:"
+          echo "    dev:  deploy/k8s/overlays/dev"
+          echo "    prod: deploy/k8s/overlays/prod"
+          echo "    kind: deploy/k8s/overlays/kind"
+          echo ""
+          echo "  To deploy locally with Kind:"
+          echo "    make kind-demo"
+          echo ""
+          echo "  For Gitops with ArgoCD/Flux:"
+          echo "    Point operator at: deploy/k8s/overlays/prod"
+          echo "══════════════════════════════════════════════"

@@ -34,11 +34,11 @@ flowchart TB
         REGISTRY[(Container Images)]
     end
 
-    subgraph GitOps["GitOps Approach"]
+    subgraph GitOps["GitOps (Kustomize)"]
         direction TB
-        MANIFESTS[deploy/k8s/ manifests<br/>versioned in git]
-        ARGO[ArgoCD / Flux<br/>syncs cluster to git]
-        MANIFESTS -->|kubectl apply| ARGO
+        BASE[deploy/k8s/base/<br/>shared manifests]
+        OVERLAYS[deploy/k8s/overlays/<br/>dev / prod / kind]
+        BASE --> OVERLAYS
     end
 
     subgraph AKS["Azure Kubernetes Service"]
@@ -64,9 +64,8 @@ flowchart TB
     DEV --> BUILD
     PUSH --> REGISTRY
     REGISTRY --> AKS
-    ARGO -->|pulls desired state| AKS
-    GH -->|image tag update| MANIFESTS
-    GH --> Local
+    OVERLAYS -->|kustomize build| AKS
+    OVERLAYS -->|kustomize build| Local
 ```
 
 ## Design Considerations
@@ -93,8 +92,8 @@ flowchart TB
 
 ### CI/CD
 - **Conditional Pipelines** — Build and test run on every PR. Azure deployment steps activate only when credentials are configured, allowing fork-friendly contribution.
-- **Idempotent Deployments** — `kubectl apply` ensures manifests are declarative. Re-running the pipeline produces the same result.
-- **GitOps Ready** — All Kubernetes manifests are versioned in this repo. See [GitOps Extension](#gitops-extension) for migration steps to ArgoCD or Flux.
+- **Idempotent Deployments** — `kustomize build | kubectl apply -f -` ensures manifests are declarative. Re-running the pipeline produces the same result.
+- **GitOps by Default** — Image tags are separated from manifests via Kustomize overlays. The CI pipeline updates the `newTag` in the prod overlay, ready for ArgoCD/Flux to sync. See [GitOps section](#gitops-extension).
 
 ## What's Demonstrated
 
@@ -113,14 +112,31 @@ flowchart TB
 
 ```
 .
-├── src/CloudNativeMicroservice/     # .NET 8 Web API
-├── .github/workflows/deploy.yml     # GitHub Actions pipeline
-├── azure-pipelines.yml              # Azure DevOps pipeline
-├── deploy/k8s/                      # Kubernetes manifests
-├── scripts/local-demo.sh            # Full local demo script
-├── docker-compose.yml               # Local container testing
-├── Dockerfile                       # Multi-stage container build
-└── Makefile                         # Task runner
+├── src/CloudNativeMicroservice/      # .NET 8 Web API
+├── .github/workflows/deploy.yml      # GitHub Actions pipeline
+├── azure-pipelines.yml               # Azure DevOps pipeline
+├── deploy/k8s/
+│   ├── base/                         # Shared Kubernetes manifests
+│   │   ├── kustomization.yaml
+│   │   ├── namespace.yaml
+│   │   ├── deployment.yaml
+│   │   └── service.yaml
+│   ├── overlays/
+│   │   ├── dev/                      # Dev environment (1 replica)
+│   │   │   └── kustomization.yaml
+│   │   ├── prod/                     # Production (3 replicas, HPA, PDB, NetworkPolicy)
+│   │   │   ├── kustomization.yaml
+│   │   │   ├── hpa.yaml
+│   │   │   ├── pdb.yaml
+│   │   │   └── network-policy.yaml
+│   │   └── kind/                     # Local Kind overlay (local image tag)
+│   │       └── kustomization.yaml
+│   ├── deployment.yaml               # Standalone manifest (backward compat)
+│   └── service.yaml                  # Standalone manifest (backward compat)
+├── scripts/local-demo.sh             # Full local demo script
+├── docker-compose.yml                # Local container testing
+├── Dockerfile                        # Multi-stage container build
+└── Makefile                          # Task runner
 ```
 
 ## Run Without Azure
@@ -185,55 +201,30 @@ Set pipeline variables (`acrLoginServer`, `aksClusterName`, etc.) via the Azure 
 
 ## GitOps Extension
 
-This repository is structured to adopt a **GitOps** workflow using **ArgoCD** or **Flux**. The key principle: the `deploy/k8s/` directory becomes the single source of truth, and a Git operator continuously reconciles the cluster to match it.
+This repository implements **GitOps** practices out of the box. Kubernetes manifests use **Kustomize** overlays for environment-specific configuration, with the image tag separated from the base manifests — the core of a pull-based GitOps workflow.
 
-### Migration Steps
+### How GitOps is Applied Here
 
-#### 1. Separate image tag from manifests
+| Principle | Implementation |
+|-----------|---------------|
+| **Declarative config** | All K8s resources defined as YAML in `deploy/k8s/` |
+| **Version controlled** | Everything in Git — full audit trail of changes |
+| **Image tag separation** | Base manifests use generic image; overlays set `newTag` via Kustomize |
+| **Environment parity** | Same base manifests across dev/prod/kind — only overlay values differ |
+| **Drift detection ready** | Namespace, labels, and selectors structured for ArgoCD/Flux sync |
+| **CI/CD idempotency** | `kustomize build | kubectl apply -f -` is safe to re-run |
 
-Move the image tag into a separate config file so manifests stay environment-agnostic:
+### Adopting ArgoCD or Flux
 
-```yaml
-# deploy/k8s/kustomization.yaml
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-resources:
-  - deployment.yaml
-  - service.yaml
-images:
-  - name: __IMAGE__
-    newName: myacr.azurecr.io/cloud-native-microservice
-    newTag: latest
-```
-
-#### 2. Update CI/CD to only build and push
-
-The pipeline no longer deploys directly — it only builds the image and updates the tag in the GitOps repo:
-
-```yaml
-# .github/workflows/deploy.yml (GitOps variant)
-steps:
-  - run: dotnet build && dotnet test
-  - run: docker build -t $ACR/$IMAGE:${{ github.sha }} .
-  - run: docker push $ACR/$IMAGE:${{ github.sha }}
-  - run: |
-      # Update tag in GitOps config repo
-      sed -i "s|newTag:.*|newTag: ${{ github.sha }}|g" deploy/k8s/kustomization.yaml
-      git commit -am "Update image tag to ${{ github.sha }}"
-      git push
-```
-
-#### 3. Install ArgoCD or Flux
+Point your GitOps operator at one of the Kustomize overlays:
 
 **ArgoCD:**
 ```bash
-kubectl create namespace argocd
-kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 argocd app create microservice \
   --repo https://github.com/your-org/azure-dotnetservice.git \
-  --path deploy/k8s \
-  --dest-server https://$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}') \
-  --dest-namespace default
+  --path deploy/k8s/overlays/prod \
+  --dest-server https://YOUR_CLUSTER_API \
+  --dest-namespace cloud-native-microservice
 ```
 
 **Flux:**
@@ -241,22 +232,29 @@ argocd app create microservice \
 flux bootstrap github \
   --owner=your-org \
   --repository=azure-dotnetservice \
-  --path=deploy/k8s \
+  --path=deploy/k8s/overlays/prod \
   --personal
 ```
 
-#### 4. Enable auto-sync
+Once the operator is installed, the CI pipeline (`update-gitops-manifest` job in `.github/workflows/deploy.yml`) builds the image, pushes it to ACR, and updates the `newTag` in `deploy/k8s/overlays/prod/kustomization.yaml`. The operator detects the drift and auto-syncs the cluster.
 
-Both ArgoCD and Flux can auto-sync the cluster to the git state. When the CI pipeline updates the image tag in `kustomization.yaml`, the operator detects the drift and applies the new image automatically.
+### Kustomize Overlay Reference
 
-### GitOps Architecture (with ArgoCD)
+| Overlay | Image | Replicas | Extra Resources | Use Case |
+|---------|-------|----------|-----------------|----------|
+| `overlays/dev` | `myacr.azurecr.io/...:latest` | 1 | — | Development |
+| `overlays/prod` | `myacr.azurecr.io/...:<sha>` | 3 | HPA, PDB, NetworkPolicy | Production |
+| `overlays/kind` | `cloud-native-microservice:local` | 1 | — | Local Kind testing |
+
+### GitOps Architecture (with ArgoCD/Flux)
 
 ```mermaid
 flowchart LR
     DEV[Developer] -->|git push| GIT[GitHub Repo]
     GIT -->|CI build + push image| ACR[Azure Container Registry]
-    GIT -->|ArgoCD syncs manifests| ARGO[ArgoCD]
-    ARGO -->|kubectl apply| AKS[AKS Cluster]
+    GIT -->|CI updates newTag in overlay| OVERLAY[deploy/k8s/overlays/prod]
+    OVERLAY -->|ArgoCD/Flux syncs| OPERATOR[GitOps Operator]
+    OPERATOR -->|kustomize build + apply| AKS[AKS Cluster]
     ACR -->|pulls new image| AKS
 ```
 
@@ -274,5 +272,9 @@ flowchart LR
 
 | File | Description |
 |------|-------------|
-| `deployment.yaml` | 3 replicas, RollingUpdate, `/health` probes, resource limits |
-| `service.yaml` | LoadBalancer exposing port 80 → container port 8080 |
+| `base/deployment.yaml` | Shared deployment — RollingUpdate, `/health` probes, resource limits |
+| `base/service.yaml` | Shared ClusterIP service on port 80 → container port 8080 |
+| `base/namespace.yaml` | Dedicated `cloud-native-microservice` namespace |
+| `overlays/prod/hpa.yaml` | CPU/memory-based Horizontal Pod Autoscaler (3–10 replicas) |
+| `overlays/prod/pdb.yaml` | Pod Disruption Budget (min 2 available during voluntary disruptions) |
+| `overlays/prod/network-policy.yaml` | Ingress traffic restricted to same-namespace pods only |

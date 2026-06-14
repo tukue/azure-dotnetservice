@@ -15,7 +15,8 @@ variables:
   tag: '$(Build.BuildId)'
   aksClusterName: '$(aksClusterName)'
   aksResourceGroup: '$(aksResourceGroup)'
-  kubernetesNamespace: 'default'
+  kubernetesNamespace: 'cloud-native-microservice'
+  kustomizeOverlay: 'deploy/k8s/overlays/prod'
   isAzureConfigured: $[eq(variables['acrLoginServer'], '')]
 
 stages:
@@ -64,6 +65,33 @@ stages:
             displayName: Local image notice
             condition: eq(variables['acrLoginServer'], '')
 
+  # ── GitOps: update image tag in Kustomize overlay ──
+  - stage: UpdateGitOpsManifest
+    displayName: Update GitOps Manifest
+    dependsOn: Build
+    condition: and(succeeded(), ne(variables['acrLoginServer'], ''))
+    jobs:
+      - job: UpdateKustomizeImageTag
+        displayName: Update image tag in Kustomize overlay
+        steps:
+          - checkout: self
+            persistCredentials: true
+
+          - script: |
+              sed -i "s|newTag:.*|newTag: $(tag)|g" $(kustomizeOverlay)/kustomization.yaml
+            displayName: Update image tag
+
+          - script: |
+              git config user.name "azure-pipelines[bot]"
+              git config user.email "azure-pipelines[bot]@users.noreply.github.com"
+              git add $(kustomizeOverlay)/kustomization.yaml
+              git diff --staged --quiet || \
+                git commit -m "chore(release): update image tag to $(tag)"
+              git push
+            displayName: Commit manifest update
+            condition: succeeded()
+
+  # ── Direct deploy (non-GitOps, backward compat) ──
   - stage: Deploy
     displayName: Deploy to Kubernetes
     dependsOn: Build
@@ -77,7 +105,7 @@ stages:
             deploy:
               steps:
                 - task: KubernetesManifest@1
-                  displayName: Deploy to AKS
+                  displayName: Deploy to AKS with Kustomize
                   inputs:
                     action: 'deploy'
                     connectionType: 'azureResourceManager'
@@ -86,12 +114,9 @@ stages:
                     kubernetesCluster: $(aksClusterName)
                     namespace: $(kubernetesNamespace)
                     manifests: |
-                      deploy/k8s/deployment.yaml
-                      deploy/k8s/service.yaml
+                      $(kustomizeOverlay)
                     imagePullSecrets: |
                       $(imagePullSecret)
-                    containers: |
-                      $(containerRegistry)/$(imageRepository):$(tag)
 
   - stage: DryRunSummary
     displayName: Deployment Summary (dry-run)
@@ -106,16 +131,16 @@ stages:
               echo "  DEPLOYMENT PREVIEW (dry-run mode)"
               echo "══════════════════════════════════════════════"
               echo "  Image:      $(imageRepository):$(tag)"
-              echo "  Cluster:    $(aksClusterName)"
-              echo "  Manifests:  deploy/k8s/"
+              echo "  Namespace:  $(kubernetesNamespace)"
+              echo "  Overlay:    $(kustomizeOverlay)"
               echo "══════════════════════════════════════════════"
               echo ""
               echo "  Azure is not configured — here's what would deploy:"
               echo ""
-              echo "  Service:  cloud-native-microservice (LoadBalancer, :80)"
-              echo "  Replicas: 3 (RollingUpdate)"
-              echo "  Probes:   /health (liveness + readiness)"
-              echo "  Limits:   250m CPU / 256Mi memory"
+              echo "  Kustomize overlays available:"
+              echo "    dev:  deploy/k8s/overlays/dev"
+              echo "    prod: deploy/k8s/overlays/prod"
+              echo "    kind: deploy/k8s/overlays/kind"
               echo ""
               echo "  To test locally: run 'make kind-demo'"
             displayName: Dry-run summary

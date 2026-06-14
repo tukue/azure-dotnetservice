@@ -1,4 +1,4 @@
-.PHONY: build test run docker-build docker-run kind-up kind-deploy kind-down kind-demo clean
+.PHONY: build test run docker-build docker-run kind-up kind-load kind-deploy kind-down kind-demo clean
 
 APP_NAME   := cloud-native-microservice
 K8S_DIR    := deploy/k8s
@@ -39,35 +39,48 @@ kind-load: docker-build kind-up
 	kind load docker-image $(APP_NAME):$(TAG) --name $(CLUSTER_NAME)
 
 kind-deploy: kind-load
-	cp $(K8S_DIR)/deployment.yaml $(K8S_DIR)/deployment.yaml.bak
-	sed -i "s|__IMAGE__|$(APP_NAME):$(TAG)|g" $(K8S_DIR)/deployment.yaml
-	kubectl apply -f $(K8S_DIR)/deployment.yaml
-	kubectl apply -f $(K8S_DIR)/service.yaml
-	kubectl rollout status deployment/$(APP_NAME) --timeout=120s
-	mv $(K8S_DIR)/deployment.yaml.bak $(K8S_DIR)/deployment.yaml
+	kustomize build $(K8S_DIR)/overlays/kind | kubectl apply -f -
+	kubectl rollout status deployment/$(APP_NAME) -n $(APP_NAME) --timeout=120s
 	@echo ""
 	@echo "Application deployed! Access it via:"
-	@kubectl port-forward svc/$(APP_NAME) 8080:80
+	@kubectl port-forward -n $(APP_NAME) svc/$(APP_NAME) 8080:80
 
-kind-test: kind-deploy
+kind-test:
 	@echo ""
 	@echo "Testing endpoints..."
 	@sleep 3
-	@curl -s http://localhost:8080/api/weather | head -c 500
-	@echo ""
-	@curl -s -o /dev/null -w "Health check: %{http_code}\n" http://localhost:8080/health
+	@kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=$(APP_NAME) -n $(APP_NAME) --timeout=60s
+	@kubectl port-forward -n $(APP_NAME) svc/$(APP_NAME) 8080:80 &
+	@PF_PID=$$!; \
+	sleep 3; \
+	curl -s http://localhost:8080/api/weather | head -c 500; \
+	echo ""; \
+	curl -s -o /dev/null -w "Health check: %{http_code}\n" http://localhost:8080/health; \
+	kill $$PF_PID 2>/dev/null || true
 
 kind-demo: kind-deploy kind-test
 	@echo ""
 	@echo "✓ Full demo complete! Run 'make kind-down' to clean up."
 
 kind-down:
-	-kubectl delete deployment $(APP_NAME) 2>/dev/null || true
-	-kubectl delete service $(APP_NAME) 2>/dev/null || true
+	-kubectl delete deployment $(APP_NAME) -n $(APP_NAME) 2>/dev/null || true
+	-kubectl delete service $(APP_NAME) -n $(APP_NAME) 2>/dev/null || true
+	-kubectl delete namespace $(APP_NAME) 2>/dev/null || true
 	@echo "Cleaned up."
 
 kind-destroy:
 	kind delete cluster --name $(CLUSTER_NAME)
+
+# ── Kustomize ────────────────────────────────────────────
+
+kustomize-dev:
+	kustomize build $(K8S_DIR)/overlays/dev
+
+kustomize-prod:
+	kustomize build $(K8S_DIR)/overlays/prod
+
+kustomize-kind:
+	kustomize build $(K8S_DIR)/overlays/kind
 
 # ── Clean ─────────────────────────────────────────────────
 

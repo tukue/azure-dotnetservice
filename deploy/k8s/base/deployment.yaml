@@ -2,11 +2,10 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: cloud-native-microservice
-  labels:
-    app.kubernetes.io/name: cloud-native-microservice
-    app.kubernetes.io/part-of: azure-dotnetservice
+  namespace: cloud-native-microservice
 spec:
-  replicas: 3
+  replicas: 1
+  revisionHistoryLimit: 3
   selector:
     matchLabels:
       app.kubernetes.io/name: cloud-native-microservice

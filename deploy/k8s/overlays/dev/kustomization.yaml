@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+metadata:
+  name: cloud-native-microservice-dev
+
+resources:
+  - ../../base
+
+labels:
+  - pairs:
+      environment: dev
+    includeSelectors: true
+
+replicas:
+  - name: cloud-native-microservice
+    count: 1
+
+images:
+  - name: cloud-native-microservice
+    newName: myacr.azurecr.io/cloud-native-microservice
+    newTag: latest
