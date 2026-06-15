@@ -40,6 +40,12 @@ variable "acr_sku" {
   default     = "Premium"
 }
 
+variable "api_server_authorized_ip_ranges" {
+  description = "IP ranges authorized to access the AKS API server. Empty list means only private VNET access."
+  type        = list(string)
+  default     = []
+}
+
 variable "tags" {
   description = "Tags to apply to all resources"
   type        = map(string)

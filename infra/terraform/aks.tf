@@ -55,7 +55,7 @@ resource "azurerm_kubernetes_cluster" "main" {
   http_application_routing_enabled = false
 
   api_server_access_profile {
-    authorized_ip_ranges = []
+    authorized_ip_ranges = var.api_server_authorized_ip_ranges
   }
 
   maintenance_window {

@@ -9,7 +9,7 @@ resource "azurerm_container_registry" "main" {
     default_action = "Deny"
   }
 
-  public_network_access_enabled = true
+  public_network_access_enabled = false
 
   retention_policy {
     days = 30

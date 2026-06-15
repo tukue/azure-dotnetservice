@@ -30,8 +30,9 @@ stages:
           - checkout: self
 
           - script: |
-              curl -sL https://github.com/aquasecurity/tfsec/releases/latest/download/tfsec-linux-amd64 -o /usr/local/bin/tfsec
-              chmod +x /usr/local/bin/tfsec
+              curl -sL https://github.com/aquasecurity/tfsec/releases/latest/download/tfsec-linux-amd64 -o tfsec
+              chmod +x tfsec
+              sudo mv tfsec /usr/local/bin/tfsec
             displayName: Install tfsec
 
           - script: |
