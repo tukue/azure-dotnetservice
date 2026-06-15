@@ -1,0 +1,12 @@
+---
+metadata:
+  id: CUSTOM_KV_001
+  name: "Key Vault should have soft delete retention >= 7 days"
+  category: "SECURITY"
+definition:
+  cond_type: "resource"
+  resource_types:
+    - "azurerm_key_vault"
+  attribute: "soft_delete_retention_days"
+  operator: "greater_than_or_equal"
+  value: 7

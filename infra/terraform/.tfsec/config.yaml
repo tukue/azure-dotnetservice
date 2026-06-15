@@ -1,0 +1,5 @@
+---
+severity_threshold: medium
+exclude:
+  # AKS cluster uses auto-scaling (min 1); we don't pin node count
+  - general-101

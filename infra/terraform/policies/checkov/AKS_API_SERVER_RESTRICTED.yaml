@@ -1,0 +1,12 @@
+---
+metadata:
+  id: CUSTOM_AKS_001
+  name: "AKS API server authorized IP ranges should not be empty"
+  category: "NETWORKING"
+definition:
+  cond_type: "resource"
+  resource_types:
+    - "azurerm_kubernetes_cluster"
+  attribute: "api_server_access_profile.authorized_ip_ranges"
+  operator: "length_greater_than"
+  value: 0

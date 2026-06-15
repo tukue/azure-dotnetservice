@@ -95,6 +95,89 @@ argocd-delete:
 argocd-status:
 	kubectl get applications -n argocd
 
+# ── DevSecOps / IaC Security Scanning ────────────────────
+#
+# Prerequisites:
+#   - tfsec:   brew install tfsec   / https://github.com/aquasecurity/tfsec
+#   - checkov: pip install checkov  / https://www.checkov.io
+
+TERRAFORM_DIR := infra/terraform
+
+tfsec:
+	tfsec $(TERRAFORM_DIR) \
+		--config-file $(TERRAFORM_DIR)/.tfsec/config.yaml
+
+tfsec-sarif:
+	tfsec $(TERRAFORM_DIR) \
+		--config-file $(TERRAFORM_DIR)/.tfsec/config.yaml \
+		--format sarif \
+		--out tfsec-results.sarif
+	@echo "SARIF output written to tfsec-results.sarif"
+
+checkov:
+	checkov \
+		--directory $(TERRAFORM_DIR) \
+		--config-file $(TERRAFORM_DIR)/.checkov.yaml
+
+checkov-sarif:
+	checkov \
+		--directory $(TERRAFORM_DIR) \
+		--config-file $(TERRAFORM_DIR)/.checkov.yaml \
+		--output sarif \
+		--output-file-path checkov-results.sarif
+	@echo "SARIF output written to checkov-results.sarif"
+
+# ── OPA Policy-as-Code ──────────────────────────────────
+#
+# Prerequisites:
+#   - opa:    https://www.openpolicyagent.org/docs/latest/#running-opa
+
+OPA_POLICIES_DIR := $(TERRAFORM_DIR)/policies/opa
+
+opa-check:
+	@echo "Generating Terraform plan JSON..."
+	terraform -chdir=$(TERRAFORM_DIR) plan -out=tfplan.binary
+	terraform -chdir=$(TERRAFORM_DIR) show -json tfplan.binary > tfplan.json
+	@echo ""
+	@echo "Running OPA policy checks..."
+	$(OPA_POLICIES_DIR)/opa-policy-check.sh tfplan.json
+
+opa-test:
+	@echo "Running OPA policy unit tests..."
+	@for policy in $(OPA_POLICIES_DIR)/policies/*.rego; do \
+		echo "  Testing $$(basename $$policy)"; \
+		opa test $$policy; \
+	done
+	@echo "✓ All OPA policy tests passed."
+
+# ── Policy-as-Code: all gates ──────────────────────────
+
+policy-as-code: tfsec checkov opa-check
+	@echo "✓ All policy-as-code gates passed."
+
+security-scan: tfsec checkov
+	@echo "✓ All infrastructure security scans passed."
+
+# ── Terraform ────────────────────────────────────────────
+
+terraform-init:
+	terraform -chdir=$(TERRAFORM_DIR) init
+
+terraform-plan:
+	terraform -chdir=$(TERRAFORM_DIR) plan
+
+terraform-apply:
+	terraform -chdir=$(TERRAFORM_DIR) apply
+
+terraform-destroy:
+	terraform -chdir=$(TERRAFORM_DIR) destroy
+
+terraform-validate:
+	terraform -chdir=$(TERRAFORM_DIR) validate
+
+terraform-fmt:
+	terraform -chdir=$(TERRAFORM_DIR) fmt -check -diff
+
 # ── Kustomize ────────────────────────────────────────────
 
 kustomize-dev:

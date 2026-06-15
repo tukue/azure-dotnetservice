@@ -19,6 +19,74 @@ env:
   NAMESPACE: cloud-native-microservice
 
 jobs:
+  # ── Infrastructure security scan (tfsec) ──────────────
+  tfsec-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run tfsec
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working-directory: infra/terraform
+          format: sarif
+          output-file: tfsec-results.sarif
+          soft_fail: false
+
+      - name: Upload tfsec SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: tfsec-results.sarif
+          category: tfsec
+
+  # ── OPA policy-as-code (terraform plan gate) ────────
+  opa-policy-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup OPA
+        run: |
+          curl -sL https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static -o opa
+          chmod +x opa
+          sudo mv opa /usr/local/bin/opa
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: OPA policy check
+        run: |
+          terraform -chdir=infra/terraform init -backend=false
+          terraform -chdir=infra/terraform plan -out=tfplan.binary
+          terraform -chdir=infra/terraform show -json tfplan.binary > tfplan.json
+          bash infra/terraform/policies/opa/opa-policy-check.sh tfplan.json
+
+  # ── Infrastructure security scan (checkov) ────────────
+  checkov-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: infra/terraform
+          config_file: infra/terraform/.checkov.yaml
+          soft_fail: false
+          output_format: sarif
+          output_file_path: checkov-results.sarif
+          extra_args: --external-checks-dir infra/terraform/policies/checkov
+
+      - name: Upload checkov SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: checkov-results.sarif
+          category: checkov
+
   build-and-test:
     runs-on: ubuntu-latest
     steps:

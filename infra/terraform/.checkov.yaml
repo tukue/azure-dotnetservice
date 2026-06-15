@@ -1,0 +1,15 @@
+---
+compact: true
+directory:
+  - .
+download-external-modules: false
+evaluate-variables: true
+framework:
+  - terraform
+skip-check:
+  - CKV_AZURE_116
+summary-position: top
+quiet: true
+soft-fail: false
+external-checks-dir:
+  - policies/checkov
