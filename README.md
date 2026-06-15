@@ -77,7 +77,7 @@ flowchart TB
 
 ### Reliability
 - **Health Probes** — Liveness (every 15s) restarts dead pods. Readiness (every 10s) removes unhealthy pods from the service load balancer.
-- **Rolling Updates** — `maxUnavailable: 0, maxSurge: 1` ensures new pods are fully ready before old ones are removed, achieving zero-downtime deployments.
+- **Rolling Updates** — `maxUnavailable: 0, maxSurge: 1` ensures zero-downtime deployments with new pods spinning up before traffic shifts.
 - **Container Restart Policy** — `Always` ensures failed containers automatically recover without manual intervention.
 
 ### Security
