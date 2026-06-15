@@ -1,0 +1,12 @@
+---
+metadata:
+  id: CUSTOM_ACR_001
+  name: "ACR public network access should be disabled"
+  category: "NETWORKING"
+definition:
+  cond_type: "resource"
+  resource_types:
+    - "azurerm_container_registry"
+  attribute: "public_network_access_enabled"
+  operator: "not_equals"
+  value: true

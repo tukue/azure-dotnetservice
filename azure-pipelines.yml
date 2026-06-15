@@ -51,6 +51,32 @@ stages:
               TargetPath: tfsec-results.sarif
             condition: succeededOrFailed()
 
+  # ── OPA policy-as-code (terraform plan gate) ──────────
+  - stage: OpaPolicyCheck
+    displayName: Policy-as-Code (OPA)
+    jobs:
+      - job: RunOpaCheck
+        displayName: Run OPA policy checks
+        steps:
+          - checkout: self
+
+          - script: |
+              curl -sL https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static -o opa
+              chmod +x opa
+              sudo mv opa /usr/local/bin/opa
+            displayName: Install OPA
+
+          - script: |
+              terraform -chdir=infra/terraform init -backend=false
+            displayName: Terraform init
+
+          - script: |
+              terraform -chdir=infra/terraform plan -out=tfplan.binary
+              terraform -chdir=infra/terraform show -json tfplan.binary > tfplan.json
+              bash infra/terraform/policies/opa/opa-policy-check.sh tfplan.json
+            displayName: Run OPA policies against plan
+            continueOnError: false
+
   # ── Infrastructure security scan (checkov) ────────────
   - stage: CheckovScan
     displayName: Infrastructure Compliance Scan (checkov)
@@ -68,6 +94,7 @@ stages:
               checkov \
                 --directory infra/terraform \
                 --config-file infra/terraform/.checkov.yaml \
+                --external-checks-dir infra/terraform/policies/checkov \
                 --output sarif \
                 --output-file-path checkov-results.sarif
             displayName: Run checkov scan

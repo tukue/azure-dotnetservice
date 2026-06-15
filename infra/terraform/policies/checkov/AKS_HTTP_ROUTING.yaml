@@ -1,0 +1,12 @@
+---
+metadata:
+  id: CUSTOM_AKS_003
+  name: "AKS HTTP application routing should be disabled"
+  category: "NETWORKING"
+definition:
+  cond_type: "resource"
+  resource_types:
+    - "azurerm_kubernetes_cluster"
+  attribute: "http_application_routing_enabled"
+  operator: "not_equals"
+  value: true

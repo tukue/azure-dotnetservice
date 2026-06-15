@@ -40,6 +40,30 @@ jobs:
           sarif_file: tfsec-results.sarif
           category: tfsec
 
+  # ── OPA policy-as-code (terraform plan gate) ────────
+  opa-policy-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup OPA
+        run: |
+          curl -sL https://openpolicyagent.org/downloads/latest/opa_linux_amd64_static -o opa
+          chmod +x opa
+          sudo mv opa /usr/local/bin/opa
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: OPA policy check
+        run: |
+          terraform -chdir=infra/terraform init -backend=false
+          terraform -chdir=infra/terraform plan -out=tfplan.binary
+          terraform -chdir=infra/terraform show -json tfplan.binary > tfplan.json
+          bash infra/terraform/policies/opa/opa-policy-check.sh tfplan.json
+
   # ── Infrastructure security scan (checkov) ────────────
   checkov-scan:
     runs-on: ubuntu-latest
@@ -54,6 +78,7 @@ jobs:
           soft_fail: false
           output_format: sarif
           output_file_path: checkov-results.sarif
+          extra_args: --external-checks-dir infra/terraform/policies/checkov
 
       - name: Upload checkov SARIF
         if: always()

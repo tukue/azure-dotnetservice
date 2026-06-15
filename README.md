@@ -84,6 +84,7 @@ flowchart TB
 - **Immutable Infrastructure** — No SSH into pods. All configuration is baked into the container image or injected via environment variables.
 - **Image Pull Policy** — `IfNotPresent` prevents unnecessary registry pulls and avoids pulling tampered images in production.
 - **Principle of Least Privilege** — Containers run without elevated privileges. Network policies can further restrict inter-pod communication.
+- **Policy-as-Code (3 layers)** — Azure Policy denies non-compliant resources before creation, Checkov/tfsec scans infrastructure code in CI, and OPA validates `terraform plan` against custom Rego policies — a defense-in-depth approach that catches misconfigurations at every stage of the delivery pipeline.
 
 ### Observability
 - **Health Endpoint** — `/health` returns HTTP 200 when the application is ready, integrated with both K8s probes and Azure Monitor.
@@ -107,6 +108,42 @@ flowchart TB
 | Rolling updates & health probes | ✅ | ✅ |
 | GitHub Actions CI/CD | ✅ | ✅ (build + dry-run) |
 | Azure Pipelines CI/CD | ✅ | ✅ (build + dry-run) |
+| tfsec IaC security scanning | ✅ | ✅ |
+| Checkov compliance scanning + custom policies | ✅ | ✅ |
+| OPA policy-as-code (terraform plan gate) | ✅ | ✅ |
+| Azure Policy definitions (preventive controls) | ✅ | — |
+
+## DevSecOps & Policy-as-Code
+
+This project demonstrates industry-leading DevSecOps practices with defense-in-depth policy enforcement across the software delivery lifecycle:
+
+### Three-Layer Policy-as-Code Model
+
+| Layer | Tool | When | What It Enforces |
+|-------|------|------|------------------|
+| **Preventive** | Azure Policy | Before resource creation | Denies non-compliant resource creation (e.g., ACR admin user, AKS without RBAC, KV without purge protection) |
+| **Shift-Left** | Checkov + tfsec | CI pipeline (PR) | Scans Terraform code for misconfigurations — catches issues before merge |
+| **Plan-Time** | OPA / Rego | `terraform plan` | Validates the planned state against custom Rego policies — blocks provisioning if violated |
+
+### Policy Coverage
+
+| Resource | Check | Layer |
+|----------|-------|-------|
+| Azure Container Registry | Public network access disabled | Checkov |
+| Azure Container Registry | Admin user disabled | Azure Policy (Deny) |
+| Azure Container Registry | Premium SKU required | OPA |
+| Azure Container Registry | Network rules default deny | OPA |
+| Azure Container Registry | CMK encryption required | Azure Policy (Audit) |
+| AKS | API server IP restrictions | Checkov + OPA |
+| AKS | RBAC + Azure AD RBAC enabled | Azure Policy (Deny) + OPA |
+| AKS | Azure Defender / OMS agent enabled | Azure Policy (DeployIfNotExists) |
+| AKS | HTTP routing disabled | Checkov |
+| Key Vault | Purge protection enabled | Azure Policy (Deny) |
+| Key Vault | Soft delete retention >= 7 days | Checkov |
+| Key Vault | Firewall rules configured | OPA |
+| Key Vault | RBAC authorization enabled | OPA |
+
+This layered approach follows the **shift-left** principle — catching issues as early as possible while maintaining hard enforcement at the Azure platform level. The pipeline **fails closed**: any scanning or policy violation blocks the deployment.
 
 ## Project Structure
 

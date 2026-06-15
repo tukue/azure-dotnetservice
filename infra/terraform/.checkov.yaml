@@ -7,9 +7,9 @@ evaluate-variables: true
 framework:
   - terraform
 skip-check:
-  # CKV_AZURE_116: AKS Azure Policy Add-on — can't be set if Azure Policy isn't pre-installed
   - CKV_AZURE_116
-  # CKV_AZURE_4: AKS auto-scaling is already enabled (min 1 / max 5)
 summary-position: top
 quiet: true
 soft-fail: false
+external-checks-dir:
+  - policies/checkov
