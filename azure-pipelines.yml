@@ -20,6 +20,66 @@ variables:
   isAzureConfigured: $[eq(variables['acrLoginServer'], '')]
 
 stages:
+  # ── Infrastructure security scan (tfsec) ──────────────
+  - stage: TfsecScan
+    displayName: Terraform Security Scan (tfsec)
+    jobs:
+      - job: RunTfsec
+        displayName: Run tfsec on Terraform code
+        steps:
+          - checkout: self
+
+          - script: |
+              curl -sL https://github.com/aquasecurity/tfsec/releases/latest/download/tfsec-linux-amd64 -o /usr/local/bin/tfsec
+              chmod +x /usr/local/bin/tfsec
+            displayName: Install tfsec
+
+          - script: |
+              tfsec infra/terraform \
+                --config-file infra/terraform/.tfsec/config.yaml \
+                --format sarif \
+                --out tfsec-results.sarif
+            displayName: Run tfsec scan
+            continueOnError: false
+
+          - task: PublishSecurityAnalysisLogs@1
+            displayName: Publish tfsec results
+            inputs:
+              ArtifactName: tfsec
+              ArtifactType: Container
+              TargetPath: tfsec-results.sarif
+            condition: succeededOrFailed()
+
+  # ── Infrastructure security scan (checkov) ────────────
+  - stage: CheckovScan
+    displayName: Infrastructure Compliance Scan (checkov)
+    jobs:
+      - job: RunCheckov
+        displayName: Run checkov on Terraform code
+        steps:
+          - checkout: self
+
+          - script: |
+              pip install checkov
+            displayName: Install checkov
+
+          - script: |
+              checkov \
+                --directory infra/terraform \
+                --config-file infra/terraform/.checkov.yaml \
+                --output sarif \
+                --output-file-path checkov-results.sarif
+            displayName: Run checkov scan
+            continueOnError: false
+
+          - task: PublishSecurityAnalysisLogs@1
+            displayName: Publish checkov results
+            inputs:
+              ArtifactName: checkov
+              ArtifactType: Container
+              TargetPath: checkov-results.sarif
+            condition: succeededOrFailed()
+
   - stage: Build
     displayName: Build .NET Application
     jobs:

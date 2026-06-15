@@ -19,6 +19,49 @@ env:
   NAMESPACE: cloud-native-microservice
 
 jobs:
+  # ── Infrastructure security scan (tfsec) ──────────────
+  tfsec-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run tfsec
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working-directory: infra/terraform
+          format: sarif
+          output-file: tfsec-results.sarif
+          soft_fail: false
+
+      - name: Upload tfsec SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: tfsec-results.sarif
+          category: tfsec
+
+  # ── Infrastructure security scan (checkov) ────────────
+  checkov-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run checkov
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: infra/terraform
+          config_file: infra/terraform/.checkov.yaml
+          soft_fail: false
+          output_format: sarif
+          output_file_path: checkov-results.sarif
+
+      - name: Upload checkov SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: checkov-results.sarif
+          category: checkov
+
   build-and-test:
     runs-on: ubuntu-latest
     steps:

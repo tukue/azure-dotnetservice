@@ -95,6 +95,61 @@ argocd-delete:
 argocd-status:
 	kubectl get applications -n argocd
 
+# ── DevSecOps / IaC Security Scanning ────────────────────
+#
+# Prerequisites:
+#   - tfsec:   brew install tfsec   / https://github.com/aquasecurity/tfsec
+#   - checkov: pip install checkov  / https://www.checkov.io
+
+TERRAFORM_DIR := infra/terraform
+
+tfsec:
+	tfsec $(TERRAFORM_DIR) \
+		--config-file $(TERRAFORM_DIR)/.tfsec/config.yaml
+
+tfsec-sarif:
+	tfsec $(TERRAFORM_DIR) \
+		--config-file $(TERRAFORM_DIR)/.tfsec/config.yaml \
+		--format sarif \
+		--out tfsec-results.sarif
+	@echo "SARIF output written to tfsec-results.sarif"
+
+checkov:
+	checkov \
+		--directory $(TERRAFORM_DIR) \
+		--config-file $(TERRAFORM_DIR)/.checkov.yaml
+
+checkov-sarif:
+	checkov \
+		--directory $(TERRAFORM_DIR) \
+		--config-file $(TERRAFORM_DIR)/.checkov.yaml \
+		--output sarif \
+		--output-file-path checkov-results.sarif
+	@echo "SARIF output written to checkov-results.sarif"
+
+security-scan: tfsec checkov
+	@echo "✓ All infrastructure security scans passed."
+
+# ── Terraform ────────────────────────────────────────────
+
+terraform-init:
+	terraform -chdir=$(TERRAFORM_DIR) init
+
+terraform-plan:
+	terraform -chdir=$(TERRAFORM_DIR) plan
+
+terraform-apply:
+	terraform -chdir=$(TERRAFORM_DIR) apply
+
+terraform-destroy:
+	terraform -chdir=$(TERRAFORM_DIR) destroy
+
+terraform-validate:
+	terraform -chdir=$(TERRAFORM_DIR) validate
+
+terraform-fmt:
+	terraform -chdir=$(TERRAFORM_DIR) fmt -check -diff
+
 # ── Kustomize ────────────────────────────────────────────
 
 kustomize-dev:
